@@ -2,156 +2,199 @@
 import numpy as np
 import sklearn
 import sklearn.datasets
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import confusion_matrix
 from pprint import pprint
 import matplotlib.pyplot as plt
 
 
+def one_hot(Y, encoding_size):
+    arr = np.zeros((len(Y), encoding_size))
+    arr[np.arange(len(Y)), Y] = 1
+    return arr
+
+
+def un_one_hot(Y_oh):
+    return np.argmax(Y_oh, axis=1)
+
+
 class Sigmoid(object):
     @staticmethod
-    def func(X):
+    def f(X):
         return 1.0 / (1.0 + np.exp(-X))
 
     @staticmethod
-    def deriv(X):
-        s = Sigmoid.func(X)
+    def df(X):
+        s = Sigmoid.f(X)
         return s * (1.0 - s)
+
+
+class Relu(object):
+    @staticmethod
+    def f(X):
+        return X * (X > 0.0)
+
+    @staticmethod
+    def df(X):
+        return 1.0 * (X > 0.0)
+
+
+class Tanh(object):
+    @staticmethod
+    def f(X):
+        return np.tanh(X)
+
+    @staticmethod
+    def df(X):
+        return 1 - np.tanh(X) ** 2
 
 
 class MSE(object):
     @staticmethod
-    def loss(X, Y):
-        diffs = Y - X
-        return 0.5 * np.sum(diffs ** 2, axis=0)
+    def f(X, Y):
+        diff = Y - X
+        return 0.5 * np.sum(diff ** 2, axis=1, keepdims=True)
 
     @staticmethod
-    def deriv(X, Y):
+    def df(X, Y):
         return X - Y
 
 
 class FCNN(object):
-    def __init__(self, layer_sizes):
+    def __init__(self, layer_sizes, activation):
         self.layer_sizes = layer_sizes
         self.num_layers = len(layer_sizes)
+        self.weights = [np.random.randn(*w)
+                        for w in zip(layer_sizes, layer_sizes[1:])]
+        self.biases = [np.random.randn(1, d) for d in layer_sizes[1:]]
+        self.activation = activation
 
-        self.weights = [
-            np.random.randn(outsize, insize)
-            for insize, outsize in zip(layer_sizes, layer_sizes[1:])
-        ]
+    def forward(self, X, debug=False):
+        for (weight, bias) in zip(self.weights[:-1], self.biases[:-1]):
+            X = self.activation.f(X.dot(weight) + bias)
 
-        self.biases = [
-            np.random.randn(outsize, 1)
-            for outsize in layer_sizes[1:]
-        ]
-
-    def forward(self, X):
-        """
-        input: X: d x n matrix
-        output: d_out x n matrix of labels
-        """
-        for (weight, bias) in zip(self.weights, self.biases):
-            X = Sigmoid.func(np.dot(weight, X) + bias)
-
+        X = X.dot(self.weights[-1]) + self.biases[-1]
         return X
 
-    def backward(self, X, Y):
-        """
-        input: X: d x n matrix
-               Y: d_out x n matrix
-        output: (dLoss_dWeights, dLoss_dBiases) where dLoss_dWeights is a
-                num_layers long list of matrices the size of each weight and
-                similarly for biases
-        """
+    def predict(self, X, debug=False):
+        return np.argmax(self.forward(X), axis=1)
 
-        activations = [X]
-        zs = []
+    def evaluate(self, X, Y):
+        preds = self.predict(X)
+        Y = un_one_hot(Y)
+        differences = np.sum(preds == Y)
+        return differences / len(Y) * 100
 
-        for (weight, bias) in zip(self.weights, self.biases):
-            z = np.dot(weight, X) + bias
+    def backward(self, X, Y, debug=False):
+        acts = [X]
+        zs   = []
+
+        for (weight, bias) in zip(self.weights[:-1], self.biases[:-1]):
+            z = X.dot(weight) + bias
             zs.append(z)
 
-            X = Sigmoid.func(z)
-            activations.append(X)
+            X = self.activation.f(z)
+            acts.append(X)
 
-        dL_dWs = [np.zeros(w.shape) for w in self.weights]
-        dL_dbs = [np.zeros(b.shape) for b in self.biases]
+        acts.append(X.dot(self.weights[-1]) + self.biases[-1])
 
-        dL_da = MSE.deriv(X, Y)
-        da_dz = Sigmoid.deriv(zs[-1])
-        # 1 x n
-        delta = dL_da * da_dz
-
-        dL_dWs[-1] = delta.dot(activations[-2].T)
-        dL_dbs[-1] = np.sum(delta, axis=1, keepdims=True)
+        dWs = [np.zeros(w.shape) for w in self.weights]
+        dbs = [np.zeros(b.shape) for b in self.biases]
+        delta = MSE.df(acts[-1], Y)
+        if debug:
+            print("Guesses: ", acts[-1])
+            print("Delta: ", delta)
+        dWs[-1] = acts[-2].T.dot(delta)
+        dbs[-1] = np.sum(delta, axis=0, keepdims=True)
 
         for li in range(2, self.num_layers):
-            z = zs[-li]
-            delta = self.weights[-li + 1].T.dot(delta) * Sigmoid.deriv(z)
-            
-            dL_dWs[-li] = delta.dot(activations[-li - 1].T)
-            dL_dbs[-li] = np.sum(delta, axis=1, keepdims=True)
+            z = zs[-li + 1]
+            delta = delta.dot(self.weights[-li + 1].T) * self.activation.df(z)
+            dWs[-li] = acts[-li - 1].T.dot(delta)
+            dbs[-li] = np.sum(delta, axis=0, keepdims=True)
 
-        return (dL_dWs, dL_dbs)
+        if debug:
+            print("Weights: ")
+            print("\n".join(map(str, dWs)))
+            print("Biases: ")
+            print("\n".join(map(str, dbs)))
+        return (dWs, dbs)
 
-    def update_mini_batch(self, X, Y, eta):
-        """
-        input: X is d_in x n, Y is d_out x n, eta is learning rate (float)
-        effect: updates weights and biases by deltas
-        """
-        dW, db = self.backward(X, Y)
+    def update_mini_batch(self, mini_X, mini_Y, eta, debug=False):
+        m = len(mini_X)
+        dWs, dbs = self.backward(mini_X, mini_Y, debug=debug)
+        self.weights = [w - (eta / m) * dw
+                        for w, dw in zip(self.weights, dWs)]
+        self.biases = [b - (eta / m) * db
+                       for b, db in zip(self.biases, dbs)]
 
-        self.weights = [w - (eta / len(X)) * d
-                        for w, d in zip(self.weights, dW)]
-
-        self.biases = [b - (eta / len(X)) * d
-                       for b, d in zip(self.biases, db)]
-
-        
-    def SGD(self, X, Y, epochs, mini_batch_size, eta):
+    def SGD(self, X, Y, epochs, mini_batch_size, eta, debug=False):
         n = len(X)
+        print("Starting SGD with batch size {}, learning rate {}".format(
+            mini_batch_size, eta))
         for i in range(epochs):
             ixs = np.arange(n)
-            mini_batch_ixs = np.random.permutation(ixs)[:mini_batch_size]
-            mini_X = X[mini_batch_ixs]
-            mini_Y = Y[mini_batch_ixs]
+            np.random.shuffle(ixs)
+            Xshuf, Yshuf = X[ixs], Y[ixs]
 
-            self.update_mini_batch(mini_X.T, mini_Y[None], eta)
-        
+            for j in range(0, n, mini_batch_size):
+                self.update_mini_batch(Xshuf[j: j + mini_batch_size],
+                                       Yshuf[j: j + mini_batch_size],
+                                       eta, debug=debug)
+            if debug:
+                print("Epoch {} complete, loss: {}".
+                      format(i, np.round(MSE.f(self.forward(X), Y)[:, 0], 2)))
+            else:
+                if i % (epochs // 10) == 0:
+                    print("Epoch {} complete, loss: {}".
+                          format(i,
+                                 np.round(np.sum(MSE.f(self.forward(X),
+                                                       Y)[:, 0]),
+                                          2)))
+
 
 if __name__ == "__main__":
-    X, y = sklearn.datasets.make_moons(100, noise=0.2)
-    n = len(X)
-    splits = [0.8, 0.9]
-    split_ixs = list(map(lambda s: int(s * n), splits))
-    nTr = split_ixs[0]
-    xTr, yTr = X[:split_ixs[0]], y[:split_ixs[0]]
-    xVa, yVa = X[split_ixs[0]:split_ixs[1]], y[split_ixs[0]:split_ixs[1]]
-    xTe, yTe = X[split_ixs[1]:], y[split_ixs[1]:]
+    # xTr = np.array([[0, 0],
+    #                 [0, 1],
+    #                 [1, 0],
+    #                 [1, 1]])
+    # yTr = one_hot(np.array([0, 1, 1, 0]), 2)
+    #
+    # nTr = len(xTr)n
+    #
+    # nns = [FCNN([2, 3, 2], Sigmoid) for _ in range(4)]
+    # s = np.zeros(nTr)
+    #
+    # for n in nns:
+    #     n.SGD(xTr, yTr, 2000, 2, 0.1)
+    #     print(np.argmax(n.forward(xTr), axis=1))
+    #     s += np.argmax(n.forward(xTr), axis=1)
 
-#    plt.scatter(X[:,0], X[:,1], c=y)
-#    plt.show()
+    # print(s / nTr)
 
-    nn = FCNN([2, 4, 4, 1])
-    preds = nn.forward(xVa.T)
-    print(1/2 * np.sum((yVa[None] - preds) ** 2))
+    np.random.seed(0)
 
-    nn.SGD(xTr, yTr, 100, 100, 0.1)
+    #X, Y = sklearn.datasets.make_moons(1000, noise=0.2)
+    digits = sklearn.datasets.load_digits()
+    X, Y = digits.data, digits.target
+    Y = one_hot(Y, 10)
 
-    preds = nn.forward(xVa.T)
-    print(1/2 * np.sum((yVa[None] - preds) ** 2))
+    xTr, xTe, yTr, yTe = train_test_split(X, Y,
+                                          test_size=0.2,
+                                          random_state=0)
 
+    nTr = len(xTr)
     
-    plt.subplot(224)
-    plt.scatter(X[:,0], X[:,1], c=y)
-    
-    plt.subplot(221)
-    preds1 = nn.forward(xTr.T)
-    print(preds1)
-    plt.scatter(xTr[:,0], xTr[:,1], c = np.round(preds1)[0].astype(int))
-    plt.subplot(222)
-    preds2 = nn.forward(xVa.T)
-    plt.scatter(xVa[:,0], xVa[:,1], c = np.round(preds2)[0].astype(int))
-    plt.subplot(223)
-    preds3 = nn.forward(xTe.T)
-    plt.scatter(xTe[:,0], xTe[:,1], c = np.round(preds3)[0].astype(int))
-    plt.show()
+    nn = FCNN([64, 2, 10], Sigmoid)
+    nn.SGD(xTr, yTr, 10000, nTr // 10, 0.2)
 
+    print("Train accuracy: {}".format(nn.evaluate(xTr, yTr)))
+    print("Test accuracy: {}".format(nn.evaluate(xTe, yTe)))
+    preds = nn.predict(xTe)
+    print(confusion_matrix(un_one_hot(yTe), preds))
+    
+    # plt.subplot(221)
+    # plt.scatter(xTe[:, 0], xTe[:, 1], c=preds, s=5)
+    # plt.subplot(222)
+    # plt.scatter(xTe[:, 0], xTe[:, 1], c=un_one_hot(yTe), s=5)
+    # plt.show()
