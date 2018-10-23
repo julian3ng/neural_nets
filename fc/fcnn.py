@@ -53,7 +53,7 @@ class MSE(object):
     @staticmethod
     def f(X, Y):
         diff = Y - X
-        return 0.5 * np.sum(diff ** 2, axis=1, keepdims=True)
+        return np.sum(0.5 * np.sum(diff ** 2, axis=1, keepdims=True), axis=0)
 
     @staticmethod
     def df(X, Y):
@@ -101,9 +101,6 @@ class FCNN(object):
         dWs = [np.zeros(w.shape) for w in self.weights]
         dbs = [np.zeros(b.shape) for b in self.biases]
         delta = MSE.df(acts[-1], Y)
-        if debug:
-            print("Guesses: ", acts[-1])
-            print("Delta: ", delta)
         dWs[-1] = acts[-2].T.dot(delta)
         dbs[-1] = np.sum(delta, axis=0, keepdims=True)
 
@@ -113,11 +110,6 @@ class FCNN(object):
             dWs[-li] = acts[-li - 1].T.dot(delta)
             dbs[-li] = np.sum(delta, axis=0, keepdims=True)
 
-        if debug:
-            print("Weights: ")
-            print("\n".join(map(str, dWs)))
-            print("Biases: ")
-            print("\n".join(map(str, dbs)))
         return (dWs, dbs)
 
     def update_mini_batch(self, mini_X, mini_Y, eta, debug=False):
@@ -143,38 +135,18 @@ class FCNN(object):
                                        eta, debug=debug)
             if debug:
                 print("Epoch {} complete, loss: {}".
-                      format(i, np.round(MSE.f(self.forward(X), Y)[:, 0], 2)))
+                      format(i, np.round(MSE.f(self.forward(X), Y), 2)))
             else:
                 if i % (epochs // 10) == 0:
                     print("Epoch {} complete, loss: {}".
                           format(i,
-                                 np.round(np.sum(MSE.f(self.forward(X),
-                                                       Y)[:, 0]),
+                                 np.round(np.sum(MSE.f(self.forward(X), Y)),
                                           2)))
 
 
 if __name__ == "__main__":
-    # xTr = np.array([[0, 0],
-    #                 [0, 1],
-    #                 [1, 0],
-    #                 [1, 1]])
-    # yTr = one_hot(np.array([0, 1, 1, 0]), 2)
-    #
-    # nTr = len(xTr)n
-    #
-    # nns = [FCNN([2, 3, 2], Sigmoid) for _ in range(4)]
-    # s = np.zeros(nTr)
-    #
-    # for n in nns:
-    #     n.SGD(xTr, yTr, 2000, 2, 0.1)
-    #     print(np.argmax(n.forward(xTr), axis=1))
-    #     s += np.argmax(n.forward(xTr), axis=1)
-
-    # print(s / nTr)
-
     np.random.seed(0)
 
-    #X, Y = sklearn.datasets.make_moons(1000, noise=0.2)
     digits = sklearn.datasets.load_digits()
     X, Y = digits.data, digits.target
     Y = one_hot(Y, 10)
@@ -192,9 +164,3 @@ if __name__ == "__main__":
     print("Test accuracy: {}".format(nn.evaluate(xTe, yTe)))
     preds = nn.predict(xTe)
     print(confusion_matrix(un_one_hot(yTe), preds))
-    
-    # plt.subplot(221)
-    # plt.scatter(xTe[:, 0], xTe[:, 1], c=preds, s=5)
-    # plt.subplot(222)
-    # plt.scatter(xTe[:, 0], xTe[:, 1], c=un_one_hot(yTe), s=5)
-    # plt.show()
