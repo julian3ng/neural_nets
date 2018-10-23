@@ -21,7 +21,8 @@ def un_one_hot(Y_oh):
 class Sigmoid(object):
     @staticmethod
     def f(X):
-        return 1.0 / (1.0 + np.exp(-X))
+        
+        return np.where(X >= 0, 1.0 / (1.0 + np.exp(-X)), np.exp(X) / (1.0 + np.exp(X)))
 
     @staticmethod
     def df(X):
@@ -74,6 +75,9 @@ class FCNN(object):
             X = self.activation.f(X.dot(weight) + bias)
 
         X = X.dot(self.weights[-1]) + self.biases[-1]
+        if debug:
+            print(np.round(X, 2))
+
         return X
 
     def predict(self, X, debug=False):
@@ -100,6 +104,7 @@ class FCNN(object):
 
         dWs = [np.zeros(w.shape) for w in self.weights]
         dbs = [np.zeros(b.shape) for b in self.biases]
+
         delta = MSE.df(acts[-1], Y)
         dWs[-1] = acts[-2].T.dot(delta)
         dbs[-1] = np.sum(delta, axis=0, keepdims=True)
@@ -143,22 +148,27 @@ class FCNN(object):
                                  np.round(np.sum(MSE.f(self.forward(X), Y)),
                                           2)))
 
+import pickle
+import gzip
 
 if __name__ == "__main__":
     np.random.seed(0)
 
-    digits = sklearn.datasets.load_digits()
-    X, Y = digits.data, digits.target
-    Y = one_hot(Y, 10)
+    with gzip.open("./data/mnist.pkl.gz", "rb") as f:
+        train, valid, test = pickle.load(f, encoding='latin1')
 
-    xTr, xTe, yTr, yTe = train_test_split(X, Y,
-                                          test_size=0.2,
-                                          random_state=0)
+    xTr, yTr = train
+    xVa, yVa = valid
+    xTe, yTe = test
 
-    nTr = len(xTr)
-    
-    nn = FCNN([64, 2, 10], Sigmoid)
-    nn.SGD(xTr, yTr, 10000, nTr // 10, 0.2)
+    yTr = one_hot(yTr, 10)
+    yVa = one_hot(yVa, 10)
+    yTe = one_hot(yTe, 10)    
+
+    nn = FCNN([784, 15, 10], Sigmoid)
+
+    nn.forward(xTr, debug=True)
+    nn.SGD(xTr, yTr, 30, 100, 1, debug=True)
 
     print("Train accuracy: {}".format(nn.evaluate(xTr, yTr)))
     print("Test accuracy: {}".format(nn.evaluate(xTe, yTe)))
